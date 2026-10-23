@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">信息互通</string>
+    <string name="endpoint">接入点（Endpoint）</string>
+    <string name="bucket">桶名（Bucket）</string>
+    <string name="region">区域（Region，SIG V4）</string>
+    <string name="ak">AccessKey ID</string>
+    <string name="sk">AccessKey Secret</string>
+    <string name="key">加密密钥（32字节 Base64）</string>
+    <string name="device_name">设备名称</string>
+    <string name="interval">轮询间隔（秒）</string>
+    <string name="start">启动同步</string>
+    <string name="stop">停止同步</string>
+    <string name="gen_key">生成新密钥</string>
+    <string name="export_cfg">导出配置（复制）</string>
+    <string name="import_cfg">导入配置（粘贴）</string>
+    <string name="ask_perms">申请权限</string>
+    <string name="open_notif_set">开启通知监听</string>
+    <string name="ignore_battery">忽略电池优化</string>
+    <string name="test_s3">测试 S3 连通</string>
+    <string name="browse_archive">信息归档浏览</string>
+    <string name="arch_more">加载更早记录</string>
+    <string name="log_title">同步日志</string>
+    <string name="perms_hint">提示：务必先申请权限并开启通知监听权限。</string>
+</resources>
