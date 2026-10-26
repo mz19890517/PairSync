@@ -13,6 +13,7 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.pairsync.app.core.ArchiveStore
 import com.pairsync.app.core.Envelope
 import com.pairsync.app.core.Mailbox
 import kotlinx.coroutines.CoroutineScope
@@ -78,7 +79,46 @@ class ArchiveActivity : AppCompatActivity() {
         btnMore.setOnClickListener { load(false) }
         spDev.onItemSelectedListener = devSelect
         spApp.onItemSelectedListener = appSelect
+        device = LOCAL_DEV
+        load(true)
         loadDevices()
+    }
+
+    private fun localPage(before: Long): Pair<List<Envelope>, Long?> {
+        val rows = ArchiveStore.page(before, 200)
+        val envs = rows.map { Envelope(it.type, it.fromId, it.fromName, it.ts, it.data) }
+        val next: Long? = if (rows.size >= 200) rows.lastOrNull()?.ts else null
+        return Pair(envs, next)
+    }
+
+    private suspend fun cloudPage(dev: String, before: Long): Pair<List<Envelope>, Long?>? {
+        val arr = try {
+            com.pairsync.app.core.CloudApi.page(dev, before, 200)
+        } catch (e: Exception) {
+            null
+        } ?: return null
+        val out = mutableListOf<Envelope>()
+        for (i in 0 until arr.length()) {
+            try {
+                val o = arr.getJSONObject(i)
+                out.add(
+                    Envelope(
+                        o.optString("type"),
+                        o.optString("fromid"),
+                        o.optString("fromname"),
+                        o.optLong("ts"),
+                        org.json.JSONObject(o.optString("data"))
+                    )
+                )
+            } catch (e: Exception) {
+            }
+        }
+        val next: Long? = if (arr.length() >= 200 && out.isNotEmpty()) out.last().ts else null
+        return Pair(out, next)
+    }
+
+    companion object {
+        const val LOCAL_DEV = "@local"
     }
 
     private val devSelect = object : AdapterView.OnItemSelectedListener {
@@ -105,11 +145,26 @@ class ArchiveActivity : AppCompatActivity() {
 
     private fun loadDevices() {
         io.launch {
-            val devs = try {
+            val cloud = try {
+                com.pairsync.app.core.CloudApi.devices()
+            } catch (e: Exception) {
+                null
+            }
+            val cloudRows = mutableListOf<Triple<String, String, Int>>()
+            if (cloud != null) {
+                for (i in 0 until cloud.length()) {
+                    try {
+                        val o = cloud.getJSONObject(i)
+                        cloudRows.add(Triple(o.optString("id"), o.optString("name"), o.optInt("n")))
+                    } catch (e: Exception) {
+                    }
+                }
+            }
+            val devs = if (cloud == null) try {
                 Mailbox.archiveDevices()
             } catch (e: Exception) {
                 emptyList<String>()
-            }
+            } else emptyList()
             val names2 = try {
                 Mailbox.listStatuses().associate { it.from to it.fromName }
             } catch (e: Exception) {
@@ -121,16 +176,28 @@ class ArchiveActivity : AppCompatActivity() {
                 val me = "本机（" + Config.deviceId + "）"
                 devLabels.add(me)
                 label2dev[me] = Config.deviceId
-                for (d in devs) {
-                    if (d == Config.deviceId) continue
-                    val lbl = (names2[d] ?: "设备 $d") + "（$d）"
-                    devLabels.add(lbl)
-                    label2dev[lbl] = d
+                val seen = mutableSetOf(Config.deviceId)
+                if (cloud != null) {
+                    for ((id, name, n) in cloudRows) {
+                        if (id.isEmpty() || !seen.add(id)) continue
+                        val lbl = (name.ifEmpty { "设备 $id" }) + "（$id，${n}条）"
+                        devLabels.add(lbl)
+                        label2dev[lbl] = id
+                    }
+                } else {
+                    for (d in devs) {
+                        if (d == Config.deviceId || !seen.add(d)) continue
+                        val lbl = (names2[d] ?: "设备 $d") + "（$d）"
+                        devLabels.add(lbl)
+                        label2dev[lbl] = d
+                    }
                 }
+                val localLbl = "本机（本地库，随时可看）"
+                devLabels.add(localLbl)
+                label2dev[localLbl] = LOCAL_DEV
                 spDev.adapter = ArrayAdapter(this@ArchiveActivity, android.R.layout.simple_spinner_dropdown_item, devLabels)
-                spDev.setSelection(0)
-                device = Config.deviceId
-                load(true)
+                val localPos = devLabels.indexOf(localLbl).coerceAtLeast(0)
+                spDev.setSelection(localPos)
             }
         }
     }
@@ -148,7 +215,7 @@ class ArchiveActivity : AppCompatActivity() {
         tvMsg.text = "加载中..."
         io.launch {
             try {
-                val r = Mailbox.archivePage(dev, before, 200)
+                val r = if (dev == LOCAL_DEV) localPage(before) else (cloudPage(dev, before) ?: Mailbox.archivePage(dev, before, 200))
                 withContext(Dispatchers.Main) {
                     items.addAll(r.first)
                     for (env in r.first) apps.add(labelOf(env))

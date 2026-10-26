@@ -5,6 +5,7 @@ import com.pairsync.app.Config
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.UUID
@@ -20,7 +21,9 @@ object Mailbox {
     fun bootstrap(ctx: Context) {
         Config.init(ctx)
         Log.initFile(ctx.getExternalFilesDir(null) ?: ctx.filesDir)
+        ArchiveStore.init(ctx)
         refresh()
+        scope.launch { archiveUploader() }
     }
 
     fun refresh() {
@@ -40,31 +43,147 @@ object Mailbox {
         scope.launch { push(type, data) }
     }
 
-    fun offerArchive(type: String, data: JSONObject) {
-        scope.launch { archive(type, data) }
-    }
-
-    suspend fun archive(type: String, data: JSONObject) {
-        val c = client ?: return
-        if (System.currentTimeMillis() < sendPauseUntil) {
-            Log.log("arch", "限流冷却中，暂缓归档 $type")
-            return
-        }
-        try {
-            val env = MsgCodec.encode(type, Config.deviceId, Config.deviceName, data)
-            val blob = Crypto.encrypt(env.toByteArray(Charsets.UTF_8), Config.keyB64) ?: return
-            val k = Config.BASE + "arch/" + Config.deviceId + "/" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8) + ".enc"
-            c.putObject(k, blob)
-            Log.log("arch", "$type -> $k")
-        } catch (e: Exception) {
-            val m = e.message ?: ""
-            if (m.contains("429")) {
-                sendPauseUntil = System.currentTimeMillis() + 60_000L
-                Log.log("arch-err", "429 限流，冷却 60s")
-            } else {
-                Log.log("arch-err", m)
+    fun sendChat(text: String, to: String) {
+        val body = text.trim()
+        if (body.isEmpty()) return
+        val data = JSONObject().put("text", body).put("to", to)
+        offerArchive("chat", data)
+        scope.launch {
+            val c = client
+            if (c == null) {
+                Log.log("chat", "未配置，发送失败")
+                return@launch
+            }
+            try {
+                val env = MsgCodec.encode("chat", Config.deviceId, Config.deviceName, System.currentTimeMillis(), data, to)
+                val blob = Crypto.encrypt(env.toByteArray(Charsets.UTF_8), Config.keyB64)
+                if (blob == null) return@launch Log.log("chat-err", "加密失败")
+                val k = Config.BASE + "msg/" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8) + ".enc"
+                c.putObject(k, blob)
+                Log.log("chat", "-> " + if (to.isEmpty()) "广播" else to + " : " + body.take(40))
+            } catch (e: Exception) {
+                Log.log("chat-err", e.toString())
             }
         }
+    }
+
+    fun offerArchive(type: String, data: JSONObject) {
+        try {
+            ArchiveStore.record(type, Config.deviceId, Config.deviceName, data)
+        } catch (e: Exception) {
+            Log.log("local-err", e.toString())
+        }
+        scope.launch { archiveUploader() }
+    }
+
+    private val uploaderWake = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    suspend fun archiveUploader() {
+        if (!uploaderWake.compareAndSet(false, true)) return
+        try {
+            while (true) {
+                val c = client
+                if (c == null || !Config.isComplete()) {
+                    delay(15_000)
+                    continue
+                }
+                val now = System.currentTimeMillis()
+                if (now < sendPauseUntil) {
+                    delay(5_000)
+                    continue
+                }
+                val batch = ArchiveStore.pendingBatch(now, 50)
+                if (batch.isEmpty()) {
+                    ArchiveStore.purge(now)
+                    delay(10_000)
+                    continue
+                }
+                var was429 = false
+                if (batch.size >= 1) {
+                    var cloudDone = false
+                    if (Config.cloudOk && !was429) {
+                        try {
+                            val rows = org.json.JSONArray()
+                            for (row in batch) {
+                                rows.put(
+                                    JSONObject()
+                                        .put("id", Config.deviceId + "-" + row.ts + "-" + row.id)
+                                        .put("ts", row.ts)
+                                        .put("type", row.type)
+                                        .put("from", row.fromId)
+                                        .put("from_name", row.fromName)
+                                        .put("data", row.data.toString())
+                                )
+                            }
+                            val ins = CloudApi.putRows(rows)
+                            cloudDone = ins >= 0
+                            if (cloudDone) Log.log(
+                                "arch",
+                                "云端 x" + batch.size + " ins=" + ins + " total=" + CloudApi.totalCount()
+                            )
+                            else Log.log("arch", "云端上传失败，转 S3 通道 x" + batch.size)
+                        } catch (e: Exception) {
+                            Log.log("arch-err", "云端: " + e.toString())
+                        }
+                    }
+                    if (cloudDone) {
+                        for (row in batch) ArchiveStore.markUploaded(row.id)
+                        delay(2_000)
+                        continue
+                    }
+                    try {
+                        val arr = org.json.JSONArray()
+                        for (row in batch) {
+                            arr.put(JSONObject().put("t", row.type).put("from", row.fromId).put("fromName", row.fromName).put("ts", row.ts).put("data", row.data).toString())
+                        }
+                        val env = JSONObject().put("v", 1).put("n", batch.size).put("e", arr).toString()
+                        val blob = Crypto.encrypt(env.toByteArray(Charsets.UTF_8), Config.keyB64)
+                        if (blob == null) {
+                            for (row in batch) ArchiveStore.markRetry(row.id, 12, System.currentTimeMillis() + 3600_000L)
+                            continue
+                        }
+                        val k = Config.BASE + "arch/" + Config.deviceId + "/" + batch.first().ts + "-" +
+                            UUID.randomUUID().toString().substring(0, 8) + ".enc"
+                        c.putObject(k, blob)
+                        for (row in batch) ArchiveStore.markUploaded(row.id)
+                        Log.log("arch", "${"批量x" + batch.size} -> $k")
+                    } catch (e: Exception) {
+                        val m = e.message ?: ""
+                        val nextDelay = if (m.contains("429")) {
+                            was429 = true
+                            sendPauseUntil = System.currentTimeMillis() + 60_000L
+                            60_000L * (1 shl batch.first().retries.coerceAtMost(6))
+                        } else {
+                            Log.log("arch-err", m)
+                            30_000L
+                        }
+                        for (row in batch) {
+                            ArchiveStore.markRetry(row.id, row.retries + 1, System.currentTimeMillis() + nextDelay)
+                        }
+                    }
+                }
+                if (was429) delay(60_000)
+            }
+        } finally {
+            uploaderWake.set(false)
+        }
+    }
+
+    private fun decodeArchiveText(txt: String): List<Envelope> {
+        val out = mutableListOf<Envelope>()
+        try {
+            val o = JSONObject(txt)
+            if (o.has("v") && o.has("e")) {
+                val arr = o.optJSONArray("e") ?: return emptyList()
+                for (i in 0 until arr.length()) {
+                    MsgCodec.decode(arr.optString(i))?.let { out.add(it) }
+                }
+                return out
+            }
+        } catch (e: Exception) {
+        }
+        MsgCodec.decode(txt)?.let { out.add(it) }
+        return out
     }
 
     suspend fun archiveDevices(): List<String> {
@@ -106,7 +225,7 @@ object Mailbox {
                 try {
                     val blob = c.getObject(k) ?: continue
                     val txt = Crypto.decrypt(blob, Config.keyB64) ?: continue
-                    MsgCodec.decode(String(txt, Charsets.UTF_8))?.let { out.add(it) }
+                    decodeArchiveText(String(txt, Charsets.UTF_8))?.let { out.addAll(it) }
                 } catch (e: Exception) {
                     val m = e.message ?: ""
                     if (m.contains("429")) fail429 = true
@@ -200,7 +319,12 @@ object Mailbox {
                     continue
                 }
                 if (env.from == Config.deviceId) {
-                    c.deleteObject(k)
+                    if (env.to.isEmpty() || env.to == Config.deviceId) {
+                        c.deleteObject(k)
+                    }
+                    continue
+                }
+                if (env.to.isNotEmpty() && env.to != Config.deviceId) {
                     continue
                 }
                 out.add(Triple(k, env, env.keyText()))

@@ -23,6 +23,9 @@ class DebugBridge : BroadcastReceiver() {
                     .put("key", Config.keyB64)
                     .put("name", Config.deviceName)
                     .put("interval", Config.intervalSec)
+                    .put("cloudHost", Config.cloudHost)
+                    .put("cloudTok", Config.cloudTok)
+                    .put("cloudGatePw", Config.cloudGatePw)
                 val dir = ctx.getExternalFilesDir(null) ?: return
                 File(dir, "export.json").writeText(cfg.toString())
                 Log.log("debug", "配置已导出 export.json")
@@ -45,6 +48,9 @@ class DebugBridge : BroadcastReceiver() {
                     if (o.has("key")) Config.keyB64 = o.getString("key")
                     if (o.has("name")) Config.deviceName = o.getString("name")
                     if (o.has("interval")) Config.intervalSec = o.getInt("interval")
+                    if (o.has("cloudHost")) Config.cloudHost = o.getString("cloudHost")
+                    if (o.has("cloudTok")) Config.cloudTok = o.getString("cloudTok")
+                    if (o.has("cloudGatePw")) Config.cloudGatePw = o.getString("cloudGatePw")
                     Config.runOnBoot = true
                     Mailbox.refresh()
                     Log.log("debug", "配置已导入，设备=${Config.deviceName} (${Config.deviceId})")

@@ -7,22 +7,28 @@ data class Envelope(
     val from: String,
     val fromName: String,
     val ts: Long,
-    val data: JSONObject
+    val data: JSONObject,
+    val to: String = ""
 ) {
     fun keyText(): String = when (t) {
         "notif" -> data.optString("packageName") + "|" + data.optString("title")
         "sms" -> "SMS " + data.optString("addr")
+        "chat" -> "聊天 " + data.optString("text").take(20)
         else -> t
     }
 }
 
 object MsgCodec {
     fun encode(type: String, from: String, fromName: String, data: JSONObject): String =
+        encode(type, from, fromName, System.currentTimeMillis(), data)
+
+    fun encode(type: String, from: String, fromName: String, ts: Long, data: JSONObject, to: String = ""): String =
         JSONObject()
             .put("t", type)
             .put("from", from)
             .put("fromName", fromName)
-            .put("ts", System.currentTimeMillis())
+            .put("ts", ts)
+            .put("to", to)
             .put("data", data)
             .toString()
 
@@ -33,7 +39,8 @@ object MsgCodec {
             o.optString("from"),
             o.optString("fromName"),
             o.optLong("ts"),
-            o.optJSONObject("data") ?: JSONObject()
+            o.optJSONObject("data") ?: JSONObject(),
+            o.optString("to")
         )
     } catch (e: Exception) {
         null

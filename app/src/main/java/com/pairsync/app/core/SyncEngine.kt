@@ -104,6 +104,10 @@ class SyncEngine(private val ctx: Context, private val scope: kotlinx.coroutines
                 Log.log("peer", "${env.fromName} 电量${d.optInt("battery")}% ${if (d.optBoolean("charging")) "充电中 " else ""}${d.optJSONObject("location")?.let { "位置(${it.optDouble("lat")},${it.optDouble("lon")})" } ?: "无位置"}")
                 true
             }
+            "chat" -> {
+                val toMark = if (env.to.isEmpty()) "广播" else "私信"
+                Notifier.post(ctx, env.fromName, "聊天消息（$toMark）", d.optString("text"))
+            }
             else -> {
                 Log.log("recv", "未知类型 ${env.t}")
                 true

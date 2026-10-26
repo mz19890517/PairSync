@@ -61,6 +61,19 @@ object Config {
         get() = prefs.getBoolean("legacyDone", false)
         set(v) = prefs.edit().putBoolean("legacyDone", v).apply()
 
+    var cloudHost: String
+        get() = get("cloudHost")
+        set(v) = put("cloudHost", v)
+    var cloudTok: String
+        get() = get("cloudTok")
+        set(v) = put("cloudTok", v)
+    var cloudGatePw: String
+        get() = get("cloudGatePw")
+        set(v) = put("cloudGatePw", v)
+
+    val cloudOk: Boolean
+        get() = cloudHost.isNotEmpty() && cloudTok.isNotEmpty() && cloudGatePw.isNotEmpty()
+
     val deviceId: String get() = get("deviceId")
 
     fun isComplete(): Boolean =
