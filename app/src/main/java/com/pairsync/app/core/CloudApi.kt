@@ -126,6 +126,45 @@ object CloudApi {
         }
     }
 
+    suspend fun wait(after: Long, secs: Int = 20): JSONObject? =
+        withContext(Dispatchers.IO) {
+            val path = "/api.php?action=wait&after=" + after + "&secs=" + secs
+            for (i in 0 until 3) {
+                if (System.currentTimeMillis() - cookieTime > 4 * 3600_000L) gateCookie = ""
+                var r: Pair<Int, String>? = try {
+                    val conn = URL(HOST + path).openConnection() as HttpURLConnection
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 20000
+                    conn.readTimeout = secs * 1000 + 15000
+                    conn.setRequestProperty("User-Agent", "PairSync/1.3")
+                    conn.setRequestProperty("X-Tok", TOK)
+                    if (gateCookie.isNotEmpty()) conn.setRequestProperty("Cookie", "zhujiwusysdomain=" + gateCookie)
+                    val code = conn.responseCode
+                    val txt = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                    conn.disconnect()
+                    Pair(code, txt)
+                } catch (e: Exception) {
+                    null
+                }
+                if (r == null && i < 2) continue
+                if (r == null) return@withContext null
+                val bodyTxt = r.second.trim().removePrefix("\uFEFF")
+                if (r.second.contains("webstop/break/") || r.second.contains("系统域名") || r.second.contains("主机域名")) {
+                    val ck = solveGate() ?: return@withContext null
+                    gateCookie = ck
+                    cookieTime = System.currentTimeMillis()
+                    continue
+                }
+                if (r.first !in 200..299) return@withContext null
+                return@withContext try {
+                    JSONObject(bodyTxt)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            null
+        }
+
     suspend fun ping(): Boolean {
         val r = call("devices") ?: return false
         return try {

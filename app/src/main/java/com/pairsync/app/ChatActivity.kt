@@ -143,6 +143,17 @@ class ChatActivity : AppCompatActivity() {
         load(true)
     }
 
+    private var resumedOnce = false
+
+    override fun onResume() {
+        super.onResume()
+        if (resumedOnce) {
+            applyFilter()
+            load(true)
+        }
+        resumedOnce = true
+    }
+
     private fun setFilter(f: String) {
         if (filter == f) return
         filter = f
@@ -208,6 +219,7 @@ class ChatActivity : AppCompatActivity() {
                                 o.optLong("ts"),
                                 JSONObject(o.optString("data"))
                             )
+                            if (dev == "@all" && e.t == "chat" && e.data.optString("to").isNotEmpty()) continue
                             if (dev != "@all") {
                                 val keep = e.from == dev ||
                                     (e.from == Config.deviceId && e.t == "chat" && e.data.optString("to") == dev)

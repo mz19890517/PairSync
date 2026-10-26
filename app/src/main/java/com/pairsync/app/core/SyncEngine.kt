@@ -40,6 +40,7 @@ object Notifier {
 
 class SyncEngine(private val ctx: Context, private val scope: kotlinx.coroutines.CoroutineScope) {
     private var job: kotlinx.coroutines.Job? = null
+    private var chatJob: kotlinx.coroutines.Job? = null
 
     fun start() {
         if (job != null) return
@@ -77,11 +78,93 @@ class SyncEngine(private val ctx: Context, private val scope: kotlinx.coroutines
                 tick++
             }
         }
+        chatJob = scope.launch {
+            Log.log("chatfast", "聊天接收启动 长轮询优先 + ${Config.chatIntervalSec}s S3兜底")
+            var backoff = 1
+            val notified = LinkedHashSet<String>()
+            while (isActive) {
+                val t0 = System.currentTimeMillis()
+                var longOk = false
+                if (Config.cloudOk) {
+                    try {
+                        val r = CloudApi.wait(Config.chatAfter, 20)
+                        if (r != null) {
+                            longOk = true
+                            var after = r.optLong("after", Config.chatAfter)
+                            val rows = r.optJSONArray("rows")
+                            if (rows != null) {
+                                for (i in 0 until rows.length()) {
+                                    try {
+                                        val o = rows.getJSONObject(i)
+                                        val seq = o.optLong("seq", 0)
+                                        if (notified.contains("S" + seq)) continue
+                                        val env = Envelope(
+                                            o.optString("type"),
+                                            o.optString("fromid"),
+                                            o.optString("fromname"),
+                                            o.optLong("ts"),
+                                            try {
+                                                JSONObject(o.optString("data"))
+                                            } catch (e: Exception) {
+                                                JSONObject()
+                                            }
+                                        )
+                                        if (env.t != "chat") {
+                                            if (seq > after) after = seq
+                                            continue
+                                        }
+                                        notified.add("S" + seq)
+                                        while (notified.size > 400) {
+                                            val it2 = notified.iterator()
+                                            if (it2.hasNext()) {
+                                                it2.next()
+                                                it2.remove()
+                                            }
+                                        }
+                                        if (seq > after) after = seq
+                                        val toMark = if (env.to.isEmpty()) "广播" else "私信"
+                                        Notifier.post(ctx, env.fromName, "聊天消息（$toMark）", env.data.optString("text"))
+                                        Log.log("recv", "${env.fromName} 聊天 ${env.data.optString("text").take(40)}")
+                                    } catch (e: Exception) {
+                                        Log.log("chatfast-err", "row: " + e.toString())
+                                    }
+                                }
+                            }
+                            if (after > Config.chatAfter) Config.chatAfter = after
+                        }
+                    } catch (e: Exception) {
+                        Log.log("chatfast-err", e.toString())
+                    }
+                }
+                if (longOk) {
+                    delay(500)
+                    continue
+                }
+                try {
+                    val msgs = Mailbox.drain(chats = true)
+                    for ((key, env, label) in msgs) {
+                        handle(env)
+                        Mailbox.ack(key)
+                        Log.log("recv", "${env.fromName} $label")
+                    }
+                    backoff = 1
+                } catch (e: Exception) {
+                    val m = e.message ?: ""
+                    Log.log("chatfast-err", e.toString())
+                    if (m.contains("429")) backoff = (backoff * 2).coerceAtMost(8)
+                }
+                val spent = (System.currentTimeMillis() - t0).toInt()
+                val wait = (Config.chatIntervalSec * 1000 - spent).coerceAtLeast(1000)
+                delay(wait.toLong() * backoff)
+            }
+        }
     }
 
     fun stop() {
         job?.cancel()
+        chatJob?.cancel()
         job = null
+        chatJob = null
         Log.log("engine", "轮询已停止")
     }
 

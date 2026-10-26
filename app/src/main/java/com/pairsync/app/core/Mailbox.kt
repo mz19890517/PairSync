@@ -46,21 +46,55 @@ object Mailbox {
     fun sendChat(text: String, to: String) {
         val body = text.trim()
         if (body.isEmpty()) return
+        val ts = System.currentTimeMillis()
         val data = JSONObject().put("text", body).put("to", to)
-        offerArchive("chat", data)
+        val rid = try {
+            ArchiveStore.record("chat", Config.deviceId, Config.deviceName, data, ts)
+        } catch (e: Exception) {
+            Log.log("local-err", e.toString())
+            -1L
+        }
         scope.launch {
+            try {
+                var cloudIns = -1
+                if (Config.cloudOk && rid > 0) {
+                    try {
+                        cloudIns = CloudApi.putRows(
+                            org.json.JSONArray().put(
+                                JSONObject()
+                                    .put("id", Config.deviceId + "-" + ts + "-" + rid)
+                                    .put("ts", ts)
+                                    .put("type", "chat")
+                                    .put("from", Config.deviceId)
+                                    .put("from_name", Config.deviceName)
+                                    .put("data", data.toString())
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.log("chat-err", "直写: " + e.toString())
+                    }
+                }
+                if (cloudIns >= 0 && rid > 0) {
+                    ArchiveStore.markUploaded(rid)
+                    Log.log("chat", "云端 " + (if (to.isEmpty()) "广播" else to) + " : " + body.take(40))
+                    return@launch
+                }
+                if (rid > 0) Log.log("chat", "直写失败转通道兜底")
+            } catch (e: Exception) {
+                Log.log("chat-err", e.toString())
+            }
             val c = client
             if (c == null) {
                 Log.log("chat", "未配置，发送失败")
                 return@launch
             }
             try {
-                val env = MsgCodec.encode("chat", Config.deviceId, Config.deviceName, System.currentTimeMillis(), data, to)
+                val env = MsgCodec.encode("chat", Config.deviceId, Config.deviceName, ts, data, to)
                 val blob = Crypto.encrypt(env.toByteArray(Charsets.UTF_8), Config.keyB64)
                 if (blob == null) return@launch Log.log("chat-err", "加密失败")
                 val k = Config.BASE + "msg/" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8) + ".enc"
                 c.putObject(k, blob)
-                Log.log("chat", "-> " + (if (to.isEmpty()) "广播" else to) + " : " + body.take(40))
+                Log.log("chat", "S3 " + (if (to.isEmpty()) "广播" else to) + " : " + body.take(40))
             } catch (e: Exception) {
                 Log.log("chat-err", e.toString())
             }
@@ -287,7 +321,7 @@ object Mailbox {
         }
     }
 
-    suspend fun drain(): List<Triple<String, Envelope, String>> {
+    suspend fun drain(chats: Boolean = false): List<Triple<String, Envelope, String>> {
         val c = client ?: return emptyList()
         val out = mutableListOf<Triple<String, Envelope, String>>()
         val now = System.currentTimeMillis()
@@ -303,7 +337,7 @@ object Mailbox {
             try {
                 val blob = c.getObject(k)
                 if (blob == null) {
-                    Log.log("recv", "对象不存在 $k")
+                    if (!chats) Log.log("recv", "对象不存在 $k")
                     continue
                 }
                 val txtBytes = Crypto.decrypt(blob, Config.keyB64)
@@ -318,10 +352,20 @@ object Mailbox {
                     c.deleteObject(k)
                     continue
                 }
-                if (env.from == Config.deviceId) {
+                if (env.t == "chat") {
+                    if (!chats) continue
                     if (env.to == Config.deviceId) {
                         c.deleteObject(k)
-                    } else if (env.to.isEmpty() && env.t != "chat") {
+                        continue
+                    }
+                    if (env.from == Config.deviceId) continue
+                    if (env.to.isNotEmpty() && env.to != Config.deviceId) continue
+                    out.add(Triple(k, env, env.keyText()))
+                    continue
+                }
+                if (chats) continue
+                if (env.from == Config.deviceId) {
+                    if (env.to.isEmpty()) {
                         c.deleteObject(k)
                     }
                     continue

@@ -340,12 +340,13 @@ class HomeActivity : AppCompatActivity() {
                 .put("key", Config.keyB64)
                 .put("name", Config.deviceName)
                 .put("interval", Config.intervalSec)
+                .put("chatInterval", Config.chatIntervalSec)
                 .put("cloudHost", Config.cloudHost)
                 .put("cloudTok", Config.cloudTok)
                 .put("cloudGatePw", Config.cloudGatePw)
             val cm = getSystemService(android.content.ClipboardManager::class.java)
             cm.setPrimaryClip(android.content.ClipData.newPlainText("pairsync", cfg.toString()))
-            toast("配置已复制（含密钥，请勿外传）")
+            toast("配置已复制（S3+云端+间隔，可在其他设备粘贴导入）")
         }
         v.findViewById<Button>(R.id.btnImport).setOnClickListener {
             val cm = getSystemService(android.content.ClipboardManager::class.java)
@@ -400,6 +401,7 @@ class HomeActivity : AppCompatActivity() {
             if (o.optString("key").isNotEmpty()) Config.keyB64 = o.optString("key")
             if (o.optString("name").isNotEmpty()) Config.deviceName = o.optString("name")
             o.optInt("interval", -1).takeIf { it > 0 }?.let { Config.intervalSec = it }
+            o.optInt("chatInterval", -1).takeIf { it > 0 }?.let { Config.chatIntervalSec = it }
             if (o.optString("cloudHost").isNotEmpty()) Config.cloudHost = o.optString("cloudHost")
             if (o.optString("cloudTok").isNotEmpty()) Config.cloudTok = o.optString("cloudTok")
             if (o.optString("cloudGatePw").isNotEmpty()) Config.cloudGatePw = o.optString("cloudGatePw")

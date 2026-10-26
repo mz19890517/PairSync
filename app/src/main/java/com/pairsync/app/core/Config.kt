@@ -53,6 +53,12 @@ object Config {
     var intervalSec: Int
         get() = get("interval", "10").toIntOrNull() ?: 10
         set(v) = put("interval", v.toString())
+    var chatIntervalSec: Int
+        get() = get("chatInterval", "5").toIntOrNull()?.coerceIn(2, 120) ?: 5
+        set(v) = put("chatInterval", v.toString())
+    var chatAfter: Long
+        get() = get("chatAfter", "0").toLongOrNull() ?: 0
+        set(v) = put("chatAfter", v.toString())
     var runOnBoot: Boolean
         get() = prefs.getBoolean("runOnBoot", false)
         set(v) = prefs.edit().putBoolean("runOnBoot", v).apply()
