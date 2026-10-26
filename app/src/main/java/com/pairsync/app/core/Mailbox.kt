@@ -43,7 +43,7 @@ object Mailbox {
         scope.launch { push(type, data) }
     }
 
-    fun sendChat(text: String, to: String) {
+    fun sendChat(text: String, to: String, ts: Long = System.currentTimeMillis()) {
         val body = text.trim()
         if (body.isEmpty()) return
         val ts = System.currentTimeMillis()

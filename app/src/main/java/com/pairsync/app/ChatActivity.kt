@@ -111,15 +111,65 @@ class ChatActivity : AppCompatActivity() {
         btnSend.setOnClickListener {
             val text = etInput.text.toString()
             if (text.isBlank()) return@setOnClickListener
+            val now = System.currentTimeMillis()
             val to = if (dev == "@all") "" else dev
-            Mailbox.sendChat(text, to)
+            Mailbox.sendChat(text, to, now)
             etInput.setText("")
             toast("已发送" + if (to.isEmpty()) "（广播）" else "（私信）")
-            val self = Bub(Envelope("chat", Config.deviceId, Config.deviceName, System.currentTimeMillis(), org.json.JSONObject().put("text", text).put("to", to), to), true)
+            val self = Bub(Envelope("chat", Config.deviceId, Config.deviceName, now, org.json.JSONObject().put("text", text).put("to", to), to), true)
             all.add(self)
             bubs.add(self)
             adapter.notifyDataSetChanged()
             list.setSelection(bubs.size - 1)
+        }
+        refreshJob = io.launch {
+            while (true) {
+                kotlinx.coroutines.delay(2500)
+                if (!resumed || loading) continue
+                try {
+                    val arr = CloudApi.page("", Long.MAX_VALUE, 60) ?: continue
+                    val fresh = ArrayList<Bub>()
+                    for (i in 0 until arr.length()) {
+                        try {
+                            val o = arr.getJSONObject(i)
+                            val e = Envelope(
+                                o.optString("type"),
+                                o.optString("fromid"),
+                                o.optString("fromname"),
+                                o.optLong("ts"),
+                                JSONObject(o.optString("data"))
+                            )
+                            if (dev == "@all" && e.t == "chat" && e.data.optString("to").isNotEmpty()) continue
+                            if (dev != "@all") {
+                                val keep = e.from == dev ||
+                                    (e.from == Config.deviceId && e.t == "chat" && e.data.optString("to") == dev)
+                                if (!keep) continue
+                            }
+                            fresh.add(Bub(e, e.from == Config.deviceId))
+                        } catch (e: Exception) {
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        val keys = HashSet<String>()
+                        for (b in all) keys.add(keyOf(b))
+                        var added = 0
+                        for (fb in fresh) {
+                            if (keys.add(keyOf(fb))) {
+                                all.add(fb)
+                                added++
+                            }
+                        }
+                        if (added > 0) {
+                            all.sortBy { it.env.ts }
+                            applyFilter()
+                            adapter.notifyDataSetChanged()
+                            list.post { list.setSelection(bubs.size - 1) }
+                            if (cursor == null) state("已到最早，共 ${all.size} 条")
+                        }
+                    }
+                } catch (e: Exception) {
+                }
+            }
         }
         list.adapter = adapter
         chips = mapOf(
@@ -144,14 +194,29 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private var resumedOnce = false
+    private var refreshJob: kotlinx.coroutines.Job? = null
+    private var resumed = false
+
+    private fun keyOf(b: Bub): String = "" + b.env.ts + "|" + b.env.from + "|" + b.env.t
+
+    override fun onPause() {
+        super.onPause()
+        resumed = false
+    }
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         if (resumedOnce) {
             applyFilter()
             load(true)
         }
         resumedOnce = true
+    }
+
+    override fun onDestroy() {
+        refreshJob?.cancel()
+        super.onDestroy()
     }
 
     private fun setFilter(f: String) {
