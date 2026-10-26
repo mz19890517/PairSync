@@ -35,11 +35,14 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var tvState: TextView
     private lateinit var etInput: EditText
     private lateinit var btnSend: Button
+    private lateinit var chips: Map<String, TextView>
     private var dev = ""
     private var peer = ""
+    private var filter = "all"
 
     private class Bub(val env: Envelope, val out: Boolean)
 
+    private val all = ArrayList<Bub>()
     private val bubs = ArrayList<Bub>()
     private var cursor: Long? = null
     private var loading = false
@@ -112,12 +115,21 @@ class ChatActivity : AppCompatActivity() {
             Mailbox.sendChat(text, to)
             etInput.setText("")
             toast("已发送" + if (to.isEmpty()) "（广播）" else "（私信）")
-            val self = Envelope("chat", Config.deviceId, Config.deviceName, System.currentTimeMillis(), org.json.JSONObject().put("text", text).put("to", to), to)
-            bubs.add(Bub(self, true))
+            val self = Bub(Envelope("chat", Config.deviceId, Config.deviceName, System.currentTimeMillis(), org.json.JSONObject().put("text", text).put("to", to), to), true)
+            all.add(self)
+            bubs.add(self)
             adapter.notifyDataSetChanged()
             list.setSelection(bubs.size - 1)
         }
         list.adapter = adapter
+        chips = mapOf(
+            "all" to findViewById(R.id.chipAll),
+            "chat" to findViewById(R.id.chipChat),
+            "notif" to findViewById(R.id.chipNotif)
+        )
+        chips["all"]!!.setOnClickListener { setFilter("all") }
+        chips["chat"]!!.setOnClickListener { setFilter("chat") }
+        chips["notif"]!!.setOnClickListener { setFilter("notif") }
         list.setOnScrollListener(object : android.widget.AbsListView.OnScrollListener {
             override fun onScroll(lv: android.widget.AbsListView, first: Int, vis: Int, total: Int) {
                 if (first == 0 && total > 0 && !loading && cursor != null) loadMore()
@@ -127,7 +139,37 @@ class ChatActivity : AppCompatActivity() {
                 if (sc == android.widget.AbsListView.OnScrollListener.SCROLL_STATE_IDLE && list.firstVisiblePosition == 0 && !loading && cursor != null) loadMore()
             }
         })
+        applyFilter()
         load(true)
+    }
+
+    private fun setFilter(f: String) {
+        if (filter == f) return
+        filter = f
+        updateChips()
+        applyFilter()
+        adapter.notifyDataSetChanged()
+        state(if (bubs.isEmpty()) "暂无消息" else null)
+        list.post { list.setSelection(bubs.size - 1) }
+    }
+
+    private fun updateChips() {
+        for ((id, v) in chips) {
+            val on = id == filter
+            v.setBackgroundResource(if (on) R.drawable.bg_pill_on else R.drawable.bg_pill_off)
+            v.setTextColor(if (on) 0xFFFFFFFF.toInt() else 0xFF333333.toInt())
+        }
+    }
+
+    private fun passes(b: Bub): Boolean = when (filter) {
+        "chat" -> b.env.t == "chat"
+        "notif" -> b.env.t != "chat"
+        else -> true
+    }
+
+    private fun applyFilter() {
+        bubs.clear()
+        for (b in all) if (passes(b)) bubs.add(b)
     }
 
     private fun state(s: String?) {
@@ -182,27 +224,26 @@ class ChatActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     val addCount = fresh.size
                     if (reset) {
-                        bubs.clear()
-                        bubs.addAll(fresh)
+                        all.clear()
+                        all.addAll(fresh)
                         cursor = next
                     } else {
-                        bubs.addAll(0, fresh)
+                        all.addAll(0, fresh)
                         cursor = next
                     }
+                    applyFilter()
                     adapter.notifyDataSetChanged()
-                    if (!reset && addCount > 0) {
-                        list.setSelection(addCount)
-                    }
+                    if (addCount > 0) list.post { list.setSelection(bubs.size - 1) }
                     state(
                         when {
-                            bubs.isEmpty() && arr == null -> "云端不可达（S3 备份通道未接入聊天）"
-                            bubs.isEmpty() -> "暂无消息"
+                            all.isEmpty() && arr == null -> "云端不可达（S3 备份通道未接入聊天）"
+                            all.isEmpty() -> "暂无消息"
                             cursor == null && !reset -> null
                             cursor != null -> "上滑查看更早"
                             else -> "已到最早"
                         }
                     )
-                    if (cursor == null && bubs.isNotEmpty()) state("已到最早，共 ${bubs.size} 条")
+                    if (cursor == null && all.isNotEmpty()) state("已到最早，共 ${all.size} 条")
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
