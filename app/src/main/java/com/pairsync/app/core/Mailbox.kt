@@ -60,7 +60,7 @@ object Mailbox {
                 if (blob == null) return@launch Log.log("chat-err", "加密失败")
                 val k = Config.BASE + "msg/" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8) + ".enc"
                 c.putObject(k, blob)
-                Log.log("chat", "-> " + if (to.isEmpty()) "广播" else to + " : " + body.take(40))
+                Log.log("chat", "-> " + (if (to.isEmpty()) "广播" else to) + " : " + body.take(40))
             } catch (e: Exception) {
                 Log.log("chat-err", e.toString())
             }
@@ -319,7 +319,9 @@ object Mailbox {
                     continue
                 }
                 if (env.from == Config.deviceId) {
-                    if (env.to.isEmpty() || env.to == Config.deviceId) {
+                    if (env.to == Config.deviceId) {
+                        c.deleteObject(k)
+                    } else if (env.to.isEmpty() && env.t != "chat") {
                         c.deleteObject(k)
                     }
                     continue

@@ -85,7 +85,9 @@ class ChatActivity : AppCompatActivity() {
                 else -> b.env.data.toString()
             }
             val tvBody = v.findViewById<TextView>(R.id.tvBubbleBody)
-            tvBody.text = if (b.env.t == "chat") head.ifEmpty { body } else head + ": " + body
+            tvBody.text = if (b.env.t == "chat") {
+                (if (showFrom) b.env.fromName + ": " else "") + b.env.data.optString("text")
+            } else head + ": " + body
             v.findViewById<TextView>(R.id.tvBubbleTime).text = sdf.format(Date(b.env.ts))
             return v
         }
