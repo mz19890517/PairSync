@@ -41,13 +41,28 @@
             android:exported="false" />
 
         <activity
+            android:name=".ImagePreviewActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ShareActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".ArchiveActivity"
             android:exported="false" />
 
         <receiver
             android:name=".DebugBridge"
-            android:exported="true">
-            <intent-filter>
+            android:exported="true">            <intent-filter>
                 <action android:name="com.pairsync.app.DEBUG_EXPORT" />
                 <action android:name="com.pairsync.app.DEBUG_IMPORT" />
             </intent-filter>
@@ -84,5 +99,15 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.pairsync.app.file"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

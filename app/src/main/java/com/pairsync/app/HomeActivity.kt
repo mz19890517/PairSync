@@ -313,11 +313,48 @@ class HomeActivity : AppCompatActivity() {
                 toast("配置不完整")
                 return@setOnClickListener
             }
-            Mailbox.refresh()
-            Config.runOnBoot = true
-            ContextCompat.startForegroundService(this, SyncService.startIntent(this))
-            setServiceButtons(true)
-            toast("同步已启动")
+            io.launch {
+                var conflict = ""
+                try {
+                    val arr = CloudApi.page("", Long.MAX_VALUE, 200)
+                    if (arr != null) {
+                        val my = Config.deviceName.trim()
+                        if (my.isNotEmpty()) {
+                            for (i in 0 until arr.length()) {
+                                try {
+                                    val o = arr.getJSONObject(i)
+                                    if (o.optString("fromid") != Config.deviceId && o.optString("fromname").trim() == my) {
+                                        conflict = my
+                                        break
+                                    }
+                                } catch (e: Exception) {
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                }
+                withContext(Dispatchers.Main) {
+                    if (conflict.isNotEmpty()) {
+                        androidx.appcompat.app.AlertDialog.Builder(this@HomeActivity)
+                            .setTitle("检测到同名设备")
+                            .setMessage("云端已有设备使用名称「" + conflict + "」。两台设备同名会导致消息混串，请先在下方「设备名」里改成别的名字，再开启同步。")
+                            .setPositiveButton("知道了", null)
+                            .show()
+                        return@withContext
+                    }
+                    Mailbox.refresh()
+                    Config.runOnBoot = true
+                    try {
+                        ContextCompat.startForegroundService(this@HomeActivity, SyncService.startIntent(this@HomeActivity))
+                    } catch (e: Exception) {
+                        toast("启动失败: " + e.message)
+                        return@withContext
+                    }
+                    setServiceButtons(true)
+                    toast("同步已启动")
+                }
+            }
         }
         btnStop.setOnClickListener {
             Config.runOnBoot = false
@@ -372,6 +409,7 @@ class HomeActivity : AppCompatActivity() {
             Mailbox.refresh()
             startActivity(Intent(this, ArchiveActivity::class.java))
         }
+        v.findViewById<Button>(R.id.btnManage).setOnClickListener { askManagePw() }
         v.findViewById<Button>(R.id.btnPerms).setOnClickListener { askPerms() }
         v.findViewById<Button>(R.id.btnNotifSet).setOnClickListener {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -386,6 +424,79 @@ class HomeActivity : AppCompatActivity() {
                 )
             } catch (e: Exception) {
                 toast("无法跳转，请手动设置电池优化")
+            }
+        }
+    }
+
+    private fun askManagePw() {
+        val et = EditText(this)
+        et.hint = "输入管理密码"
+        et.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("设备管理")
+            .setView(et)
+            .setPositiveButton("进入") { _, _ ->
+                if (et.text.toString() == "mz19890517") showDeviceManager() else toast("管理密码错误")
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showDeviceManager() {
+        io.launch {
+            val devs = try {
+                CloudApi.devices()
+            } catch (e: Exception) {
+                null
+            }
+            withContext(Dispatchers.Main) {
+                if (devs == null) {
+                    toast("云端不可达，拉取设备失败")
+                    return@withContext
+                }
+                val ids = ArrayList<String>()
+                val labels = ArrayList<String>()
+                for (i in 0 until devs.length()) {
+                    try {
+                        val o = devs.getJSONObject(i)
+                        val id = o.optString("id")
+                        if (id == Config.deviceId) continue
+                        ids.add(id)
+                        labels.add(
+                            (o.optString("name").ifEmpty { "设备 " + id }) + "  ·  " + id.take(8) +
+                                "  ·  " + o.optInt("n") + " 条"
+                        )
+                    } catch (e: Exception) {
+                    }
+                }
+                if (ids.isEmpty()) {
+                    toast("没有其他云端设备")
+                    return@withContext
+                }
+                androidx.appcompat.app.AlertDialog.Builder(this@HomeActivity)
+                    .setTitle("管理云端设备（点按删除）")
+                    .setItems(labels.toTypedArray()) { _, w ->
+                        val victim = ids.getOrNull(w) ?: return@setItems
+                        androidx.appcompat.app.AlertDialog.Builder(this@HomeActivity)
+                            .setTitle("删除设备")
+                            .setMessage("将从云端清除「$victim」的全部归档记录（上传、聊天、通知）。对方设备仍在运行时会随下一条归档重新出现；对方同步的数据在本机的归档不会受影响。继续？")
+                            .setPositiveButton("删除") { _, _ ->
+                                io.launch {
+                                    val n = try {
+                                        CloudApi.purge(victim)
+                                    } catch (e: Exception) {
+                                        -1
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        toast(if (n >= 0) "已从云端删除 $n 条记录" else "删除失败，云端不可达")
+                                    }
+                                }
+                            }
+                            .setNegativeButton("取消", null)
+                            .show()
+                    }
+                    .setNegativeButton("关闭", null)
+                    .show()
             }
         }
     }

@@ -87,6 +87,17 @@
         android:orientation="horizontal"
         android:padding="8dp">
 
+        <Button
+            android:id="@+id/btnChatAtt"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:minWidth="44dp"
+            android:text="＋"
+            android:textColor="#333333"
+            android:textSize="20sp" />
+
         <EditText
             android:id="@+id/etChatInput"
             android:layout_width="0dp"

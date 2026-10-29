@@ -19,15 +19,25 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 object Notifier {
-    fun post(ctx: Context, fromName: String, title: String, text: String): Boolean {
+    fun post(ctx: Context, fromName: String, title: String, text: String, tapDev: String? = null): Boolean {
         val enabled = NotificationManagerCompat.from(ctx).areNotificationsEnabled()
         if (!enabled) return false
+        val pi: android.app.PendingIntent? = tapDev?.let {
+            android.app.PendingIntent.getActivity(
+                ctx, ("chat" + it + title).hashCode(),
+                android.content.Intent(ctx, com.pairsync.app.ChatActivity::class.java)
+                    .putExtra("dev", it)
+                    .putExtra("name", fromName),
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+        }
         val n: Notification = NotificationCompat.Builder(ctx, "msg")
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentTitle("「$fromName」$title")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setAutoCancel(true)
+            .setContentIntent(pi)
             .build()
         return try {
             NotificationManagerCompat.from(ctx).notify(title.hashCode() * 31 + text.hashCode(), n)
@@ -123,8 +133,9 @@ class SyncEngine(private val ctx: Context, private val scope: kotlinx.coroutines
                                         }
                                         if (seq > after) after = seq
                                         val toMark = if (env.to.isEmpty()) "广播" else "私信"
-                                        Notifier.post(ctx, env.fromName, "聊天消息（$toMark）", env.data.optString("text"))
-                                        Log.log("recv", "${env.fromName} 聊天 ${env.data.optString("text").take(40)}")
+                                        val txt = chatPreview(env.data)
+                                        Notifier.post(ctx, env.fromName, "聊天消息（$toMark）", txt, env.from)
+                                        Log.log("recv", "${env.fromName} 聊天 ${txt.take(40)}")
                                     } catch (e: Exception) {
                                         Log.log("chatfast-err", "row: " + e.toString())
                                     }
@@ -189,13 +200,23 @@ class SyncEngine(private val ctx: Context, private val scope: kotlinx.coroutines
             }
             "chat" -> {
                 val toMark = if (env.to.isEmpty()) "广播" else "私信"
-                Notifier.post(ctx, env.fromName, "聊天消息（$toMark）", d.optString("text"))
+                Notifier.post(ctx, env.fromName, "聊天消息（$toMark）", chatPreview(d), env.from)
             }
             else -> {
                 Log.log("recv", "未知类型 ${env.t}")
                 true
             }
         }
+    }
+
+    private fun chatPreview(d: org.json.JSONObject): String {
+        val kind = d.optString("kind")
+        if (kind.isNotEmpty()) {
+            val mark = if (kind == "img") "[图片]" else "[文件]"
+            val nm = d.optString("name")
+            return if (nm.isEmpty()) mark else "$mark $nm"
+        }
+        return d.optString("text")
     }
 
     private fun pushStatus(tick: Int) {

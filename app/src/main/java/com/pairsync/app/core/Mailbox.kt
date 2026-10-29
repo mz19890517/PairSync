@@ -22,6 +22,7 @@ object Mailbox {
         Config.init(ctx)
         Log.initFile(ctx.getExternalFilesDir(null) ?: ctx.filesDir)
         ArchiveStore.init(ctx)
+        ChatStore.init(ctx)
         refresh()
         scope.launch { archiveUploader() }
     }
@@ -46,8 +47,10 @@ object Mailbox {
     fun sendChat(text: String, to: String, ts: Long = System.currentTimeMillis()) {
         val body = text.trim()
         if (body.isEmpty()) return
-        val ts = System.currentTimeMillis()
-        val data = JSONObject().put("text", body).put("to", to)
+        sendChatData(JSONObject().put("text", body).put("to", to), to, ts)
+    }
+
+    fun sendChatData(data: JSONObject, to: String, ts: Long) {
         val rid = try {
             ArchiveStore.record("chat", Config.deviceId, Config.deviceName, data, ts)
         } catch (e: Exception) {
@@ -76,7 +79,7 @@ object Mailbox {
                 }
                 if (cloudIns >= 0 && rid > 0) {
                     ArchiveStore.markUploaded(rid)
-                    Log.log("chat", "云端 " + (if (to.isEmpty()) "广播" else to) + " : " + body.take(40))
+                    Log.log("chat", "云端 " + (if (to.isEmpty()) "广播" else to) + " : " + data.optString("text").take(40))
                     return@launch
                 }
                 if (rid > 0) Log.log("chat", "直写失败转通道兜底")
@@ -94,10 +97,97 @@ object Mailbox {
                 if (blob == null) return@launch Log.log("chat-err", "加密失败")
                 val k = Config.BASE + "msg/" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8) + ".enc"
                 c.putObject(k, blob)
-                Log.log("chat", "S3 " + (if (to.isEmpty()) "广播" else to) + " : " + body.take(40))
+                Log.log("chat", "S3 " + (if (to.isEmpty()) "广播" else to) + " : " + data.optString("text").take(40))
             } catch (e: Exception) {
                 Log.log("chat-err", e.toString())
             }
+        }
+    }
+
+    fun attKey(name: String, size: Int, ts: Long): String =
+        Config.BASE + "att/" + ts + "-" + Integer.toHexString((name + ":" + size).hashCode()) + ".enc"
+
+    fun sendAtt(bytes: ByteArray, name: String, mime: String, to: String, ts: Long = System.currentTimeMillis()) {
+        if (bytes.isEmpty()) return
+        val kind = if (mime.startsWith("image/")) "img" else "file"
+        val key = attKey(name, bytes.size, ts)
+        val data = JSONObject()
+            .put("text", "")
+            .put("to", to)
+            .put("kind", kind)
+            .put("name", name)
+            .put("size", bytes.size)
+            .put("mime", mime)
+            .put("key", key)
+        val log = "[" + (if (kind == "img") "图片" else "文件") + " " + name + " " + (bytes.size / 1024) + "KB]"
+        val rid = try {
+            ArchiveStore.record("chat", Config.deviceId, Config.deviceName, data, ts)
+        } catch (e: Exception) {
+            Log.log("local-err", e.toString())
+            -1L
+        }
+        scope.launch {
+            val c = client
+            if (c == null) {
+                Log.log("att", "未配置，附件发送失败 $log")
+                return@launch
+            }
+            try {
+                val blob = Crypto.encrypt(bytes, Config.keyB64)
+                if (blob == null) {
+                    Log.log("att-err", "附件加密失败")
+                    return@launch
+                }
+                c.putObject(key, blob)
+                Log.log("att", "上传 $log")
+            } catch (e: Exception) {
+                Log.log("att-err", e.toString())
+                return@launch
+            }
+            var cloudIns = -1
+            if (Config.cloudOk && rid > 0) {
+                try {
+                    cloudIns = CloudApi.putRows(
+                        org.json.JSONArray().put(
+                            JSONObject()
+                                .put("id", Config.deviceId + "-" + ts + "-" + rid)
+                                .put("ts", ts)
+                                .put("type", "chat")
+                                .put("from", Config.deviceId)
+                                .put("from_name", Config.deviceName)
+                                .put("data", data.toString())
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.log("att-err", "直写: " + e.toString())
+                }
+            }
+            if (cloudIns >= 0 && rid > 0) {
+                ArchiveStore.markUploaded(rid)
+                Log.log("att", "云端 $log")
+                return@launch
+            }
+            try {
+                val env = MsgCodec.encode("chat", Config.deviceId, Config.deviceName, ts, data, to)
+                val blob = Crypto.encrypt(env.toByteArray(Charsets.UTF_8), Config.keyB64)
+                if (blob == null) return@launch Log.log("att-err", "加密失败")
+                val k = Config.BASE + "msg/" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8) + ".enc"
+                c.putObject(k, blob)
+                Log.log("att", "S3 兜底 $log")
+            } catch (e: Exception) {
+                Log.log("att-err", e.toString())
+            }
+        }
+    }
+
+    fun getObject(key: String): ByteArray? {
+        val c = client ?: return null
+        return try {
+            val raw = c.getObject(key) ?: return null
+            Crypto.decrypt(raw, Config.keyB64)
+        } catch (e: Exception) {
+            Log.log("att-err", "下载: " + e.toString())
+            null
         }
     }
 

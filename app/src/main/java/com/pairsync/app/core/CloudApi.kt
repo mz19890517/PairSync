@@ -113,6 +113,15 @@ object CloudApi {
         }
     }
 
+    suspend fun purge(dev: String): Int {
+        val r = call("purge", "device=" + java.net.URLEncoder.encode(dev, "UTF-8")) ?: return -1
+        return try {
+            JSONObject(r).optInt("del", -1)
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
     suspend fun page(dev: String, before: Long, limit: Int, type: String = ""): JSONArray? {
         val p = StringBuilder()
         p.append("before=").append(before).append("&limit=").append(limit)
